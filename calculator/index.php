@@ -74,7 +74,7 @@
     function main() {
         global $calc;
         global $op_index;
-        echo $calc->Result($op_index);    
+        echo $calc->Result($op_index);
     }
 ?>
 
