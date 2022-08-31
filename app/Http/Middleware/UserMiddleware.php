@@ -3,9 +3,11 @@
 namespace App\Http\Middleware;
 
 use App\Http\Controllers\JWTTools;
+use App\Http\Controllers\UserController;
 use Closure;
 use Exception;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Redirect;
 
 class UserMiddleware
 {
@@ -31,11 +33,9 @@ class UserMiddleware
                 throw new Exception('Пользователь не аутетифицирован');
             }
 
-            // dd(JWTTools::is_jwt_valid($access_token, env('JWT_ACCESS_SECRET')));
-
             if (!JWTTools::is_jwt_valid($access_token, env('JWT_ACCESS_SECRET'))) {
-                
-                throw new Exception('Токен не валиден');
+                echo 'токен умер';
+                return Redirect::to('api/refresh');
             }
 
             return $next($request);

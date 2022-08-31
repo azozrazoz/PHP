@@ -131,7 +131,7 @@ img.avatar {
 
 <h2>Login Form</h2>
 
-<form action="/api/login method="get">
+<form action="/api/login" method="POST">
 
   <div class="container">
     

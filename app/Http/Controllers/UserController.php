@@ -2,11 +2,9 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Token;
 use App\Models\User;
 use Exception;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -89,6 +87,7 @@ class UserController extends Controller
                 return response('ERROR!');
     
                 // to do отправка сообщения по почте со специальной активационной ссылкой
+                // то есть нужно передать микросервису по работе с почтой email пользователя и activation_link в сообщении
     
             }
     
@@ -109,9 +108,7 @@ class UserController extends Controller
 
             $user = DB::table('users')->where('email', '=', $user_data['email'])->first();
 
-            if (!is_null($user)) {            
-                
-                //dd(Hash::check($user_data['password'], $user->password));
+            if (!is_null($user)) {     
 
                 if (Hash::check($user_data['password'], $user->password)) {
                     $tokens = JWTTools::get_token($user);
@@ -180,8 +177,6 @@ class UserController extends Controller
 
             $refresh = $request->cookie('refresh');
 
-            //dd($refresh);
-
             if (is_null($refresh)) {
                 return response('Пользователь не авторизован', status: 401);
             }
@@ -205,7 +200,6 @@ class UserController extends Controller
     
                     return response('Непредвиденная ошибка', status: 500);
                 }
-
             }
 
             return redirect('login');
@@ -259,16 +253,14 @@ class JWTTools {
         $access_payload = array(
             'user_id' => $payload->id,            
             'email' => $payload->email,            
-            'exp' => (time() + 10), // нужно поменять на 15 * 60
+            'exp' => (time() + 10), // 15 * 60
         );
 
         $refresh_payload = array(
             'user_id' => $payload->id,            
             'email' => $payload->email,            
-            'exp' => (time() + 30 * 24 * 60 * 60),
+            'exp' => (time() + 60), // 30 * 24 * 60 * 60
         );
-
-        // 'exp' => (time() + 60)
 
         $jwt_access = JWTTools::generate_jwt(payload: json_encode($access_payload), secret: env("JWT_ACCESS_SECRET"));
         $jwt_refresh = JWTTools::generate_jwt(payload: json_encode($refresh_payload), secret: env("JWT_REFRESH_SECRET"));
@@ -295,24 +287,25 @@ class JWTTools {
     }
     
     public static function is_jwt_valid($jwt, $secret = 'secret') {
-        // split the jwt
+
         $tokenParts = explode('.', $jwt);
         $header = base64_decode($tokenParts[0]);
         $payload = base64_decode($tokenParts[1]);
         $signature_provided = $tokenParts[2];
 
-        // check the expiration time - note this will cause an error if there is no 'exp' claim in the jwt
+        // получение времени жизни, jwt должен обязательно содержать поле exp
         $expiration = json_decode(json_decode($payload))->exp;
 
+        // проверка, жив ли токен?
         $is_token_expired = ($expiration - time()) < 0;
     
-        // build a signature based on the header and payload using the secret
+        // создается подпись на основе header, payload, signature, используя секретную подпись
         $base64_url_header = base64url_encode($header);
         $base64_url_payload = base64url_encode($payload);
         $signature = hash_hmac('SHA256', $base64_url_header . "." . $base64_url_payload, $secret, true);
         $base64_url_signature = base64url_encode($signature);
     
-        // verify it matches the signature provided in the jwt
+        // проверка подписи
         $is_signature_valid = ($base64_url_signature === $signature_provided);
         
         if ($is_token_expired || !$is_signature_valid) {
