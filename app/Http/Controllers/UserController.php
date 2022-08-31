@@ -6,6 +6,7 @@ use App\Models\Token;
 use App\Models\User;
 use Exception;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cookie;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -40,15 +41,14 @@ class UserController extends Controller
             }
 
             if (!filter_var($user_data['email'], FILTER_VALIDATE_EMAIL)) {
-                return 'Введите корректный email address';
+                return response('Введите корректный email address', status: 400);
             }
 
             if (strlen($user_data['password']) < 8) {
-                return view('short_password');
+                return response('Введите корректный пароль', status: 400);
             }
     
-            if (DB::table('users')
-            ->where('email', '=', $user_data['email'])->get(['email'])->toArray() == []) {
+            if (is_null(DB::table('users')->where('email', '=', $user_data['email'])->first())) {
     
                 $hash_password = Hash::make($user_data['password']);
     
@@ -76,12 +76,13 @@ class UserController extends Controller
     
                 if (DB::table('users')->insert($user_db)) {
 
-                    $user = DB::table('users')->where('email', '=', $user_data['email'])->get()->toArray();
+                    $user = DB::table('users')->where('email', '=', $user_data['email'])->first();
 
                     $tokens = JWTTools::get_token($user);
 
-                    if (!is_null(JWTTools::save_token($user[0]->id, $tokens['refresh']))) {
-                        return response('Пользователь успешно зарегистрирован!', status: 200)->withCookie(cookie('refresh', $tokens['refresh'], 43200, httpOnly: true));
+                    if (!is_null(JWTTools::save_token($user->id, $tokens['refresh']))) {
+                        return response()->json(array('access' => $tokens['access']), status: 200)
+                        ->withCookie(cookie('refresh', $tokens['refresh'], 43200, httpOnly: true));
                     }                    
                 }
 
@@ -98,20 +99,57 @@ class UserController extends Controller
         }
     }
 
-    public function login()
+    public function login(Request $request)
     {
         try {
-            
+            $user_data = validator($request->all(), [
+                'email' => 'sometimes|required|email',
+                'password' => 'required|min:8',
+            ])->validate();
 
-            return response('Пользователь успешно зарегистрирован!', status: 200)->withCookie(cookie('refresh', $tokens['refresh'], 43200, httpOnly: true));
+            $user = DB::table('users')->where('email', '=', $user_data['email'])->first();
+
+            if (!is_null($user)) {            
+                
+                //dd(Hash::check($user_data['password'], $user->password));
+
+                if (Hash::check($user_data['password'], $user->password)) {
+                    $tokens = JWTTools::get_token($user);
+
+                    if (!is_null(JWTTools::save_token($user->id, $tokens['refresh']))) {
+
+                        return response()
+                        ->json(array('access' => $tokens['access'], 'message' => 'Пользователь успешно вошел в аккаунт!'))
+                        ->withCookie(cookie('refresh', $tokens['refresh'], 43200, httpOnly: true));
+
+                    } 
+                }
+                
+                return response('Неверный пароль', status: 400);
+                
+            }
+
+            return response('Такого пользователя не существует', status: 400);
+            
         } catch (Exception $e) {
             echo $e;
         }
     }
 
-    public function logout()
+    public function logout(Request $request)
     {
         try {
+
+            $refresh = $request->cookie('refresh');
+
+            if (!is_null($refresh)) {
+
+                DB::table('token')->where('refresh', '=', $refresh)->delete();
+
+                return response('Пользователь успешно покинул нас')->withoutCookie(cookie: Cookie('refresh'));
+            }
+
+            return response('Пользователь не вошел в аккаунт');
 
         } catch (Exception $e) {
             echo $e;
@@ -136,9 +174,41 @@ class UserController extends Controller
         }
     }
 
-    public function refresh()
+    public function refresh(Request $request)
     {
         try {
+
+            $refresh = $request->cookie('refresh');
+
+            //dd($refresh);
+
+            if (is_null($refresh)) {
+                return response('Пользователь не авторизован', status: 401);
+            }
+
+            if (JWTTools::is_jwt_valid($refresh, env('JWT_REFRESH_SECRET'))) {
+
+                $token = DB::table('token')->where('refresh', '=', $refresh)->first('user_id');
+
+                if (!is_null($token)) {
+
+                    $user = DB::table('users')->where('id', '=', $token->user_id)->first();
+
+                    $tokens = JWTTools::get_token($user);   
+    
+                    if (!is_null(JWTTools::save_token($token->user_id, $tokens['refresh']))) {
+    
+                        return response()->json(array('access' => $tokens['access']), status: 200)
+                        ->withCookie(cookie('refresh', $tokens['refresh'], 43200, httpOnly: true));
+    
+                    } 
+    
+                    return response('Непредвиденная ошибка', status: 500);
+                }
+
+            }
+
+            return redirect('login');
 
         } catch (Exception $e) {
             echo $e;
@@ -148,7 +218,7 @@ class UserController extends Controller
     public function get_users()
     {
         try {
-            $users = User::all('name', 'email');
+            $users = User::all();
 
             return $users;
 
@@ -187,14 +257,14 @@ class JWTTools {
     public static function get_token($payload) { 
 
         $access_payload = array(
-            'user_id' => $payload[0]->id,            
-            'email' => $payload[0]->email,            
-            'exp' => (time() + 15 * 60),
+            'user_id' => $payload->id,            
+            'email' => $payload->email,            
+            'exp' => (time() + 10), // нужно поменять на 15 * 60
         );
 
         $refresh_payload = array(
-            'user_id' => $payload[0]->id,            
-            'email' => $payload[0]->email,            
+            'user_id' => $payload->id,            
+            'email' => $payload->email,            
             'exp' => (time() + 30 * 24 * 60 * 60),
         );
 
@@ -224,15 +294,16 @@ class JWTTools {
         return $jwt;
     }
     
-    function is_jwt_valid($jwt, $secret = 'secret') {
+    public static function is_jwt_valid($jwt, $secret = 'secret') {
         // split the jwt
         $tokenParts = explode('.', $jwt);
         $header = base64_decode($tokenParts[0]);
         $payload = base64_decode($tokenParts[1]);
         $signature_provided = $tokenParts[2];
-    
+
         // check the expiration time - note this will cause an error if there is no 'exp' claim in the jwt
-        $expiration = json_decode($payload)->exp;
+        $expiration = json_decode(json_decode($payload))->exp;
+
         $is_token_expired = ($expiration - time()) < 0;
     
         // build a signature based on the header and payload using the secret
